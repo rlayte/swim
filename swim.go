@@ -12,13 +12,14 @@ import (
 
 const (
 	T       time.Duration = time.Second
-	Timeout time.Duration = T / 4
+	Timeout time.Duration = T / 3
 	k       int           = 3
 )
 
 type Node struct {
 	Members map[string]bool
 	Host    string
+	dead    bool
 }
 
 type PingArgs struct {
@@ -29,8 +30,14 @@ type PingReply struct {
 	Ack bool
 }
 
+func (n *Node) Failed(args *PingArgs, reply *PingReply) error {
+	delete(n.Members, args.Host)
+	reply.Ack = true
+	return nil
+}
+
 func (n *Node) Join(args *PingArgs, reply *PingReply) error {
-	if !n.Members[args.Host] {
+	if !n.Members[args.Host] && args.Host != n.Host {
 		n.Members[args.Host] = true
 	}
 
@@ -78,15 +85,30 @@ func (n *Node) broadcast(method string, args PingArgs, reply PingReply) {
 }
 
 func (n *Node) pingMember(host string) {
-	args := PingArgs{n.Host}
-	reply := PingReply{}
-	n.call(host, "Node.Ping", &args, &reply)
+	resp := make(chan bool)
+
+	go func() {
+		args := PingArgs{n.Host}
+		reply := PingReply{}
+		n.call(host, "Node.Ping", &args, &reply)
+		resp <- reply.Ack
+	}()
+
+	select {
+	case <-resp:
+	case <-time.After(Timeout):
+		go n.broadcast("Node.Failed", PingArgs{host}, PingReply{})
+		delete(n.Members, host)
+	}
 }
 
 func (n *Node) heartbeat() {
 	for {
-		host := n.pickMember()
-		go n.pingMember(host)
+		if !n.dead {
+			host := n.pickMember()
+			go n.pingMember(host)
+		}
+
 		time.Sleep(T)
 	}
 }
@@ -127,7 +149,9 @@ func (n *Node) startRPC() {
 			log.Println("Error", err)
 		}
 
-		go rpcs.ServeConn(conn)
+		if !n.dead {
+			go rpcs.ServeConn(conn)
+		}
 	}
 }
 

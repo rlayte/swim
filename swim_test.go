@@ -21,7 +21,18 @@ func checkCluster(t *testing.T, cluster []*Node) {
 	}
 }
 
-func checkFailures(t *testing.T, cluster []*Node, failed []int) {
+func checkFailures(t *testing.T, cluster []*Node, failed map[string]bool) {
+	for _, node := range cluster {
+		if node.dead {
+			continue
+		}
+
+		for host, _ := range node.Members {
+			if failed[host] {
+				t.Error("Node has failed", node.Host, host)
+			}
+		}
+	}
 }
 
 func createCluster(size int) []*Node {
@@ -42,4 +53,11 @@ func TestNoFailures(t *testing.T) {
 	time.Sleep(T * 10)
 
 	checkCluster(t, cluster)
+
+	cluster[3].dead = true
+	cluster[7].dead = true
+
+	time.Sleep(T * 10)
+
+	checkFailures(t, cluster, map[string]bool{"gossip-3": true, "gossip-7": true})
 }
