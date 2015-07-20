@@ -3,6 +3,7 @@ package swim
 import (
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
 	"net/rpc"
 	"os"
@@ -21,23 +22,29 @@ type Node struct {
 }
 
 type PingArgs struct {
-	Host    string
-	Members map[string]bool
+	Host string
 }
 
 type PingReply struct {
 	Ack bool
 }
 
-func (n *Node) Ping(args *PingArgs, reply *PingReply) error {
-	n.Members[args.Host] = true
-
-	for member, _ := range args.Members {
-		if member != n.Host {
-			n.Members[member] = true
-		}
+func (n *Node) Join(args *PingArgs, reply *PingReply) error {
+	if !n.Members[args.Host] {
+		n.Members[args.Host] = true
 	}
 
+	reply.Ack = true
+	return nil
+}
+
+func (n *Node) Ping(args *PingArgs, reply *PingReply) error {
+	if !n.Members[args.Host] {
+		go n.broadcast("Node.Join", PingArgs{args.Host}, PingReply{})
+		n.Members[args.Host] = true
+	}
+
+	reply.Ack = true
 	return nil
 }
 
@@ -45,18 +52,41 @@ func (n *Node) PingReq(args *PingArgs, reply *PingReply) error {
 	return nil
 }
 
-func (n *Node) heartbeat() {
-	for {
-		for host, _ := range n.Members {
-			args := PingArgs{n.Host, n.Members}
-			reply := PingReply{}
-			n.call(host, "Node.Ping", &args, &reply)
+func (n *Node) pickMember() string {
+	if len(n.Members) == 0 {
+		return ""
+	}
 
-			if reply.Ack {
-				n.Members[host] = true
-			}
+	index := rand.Intn(len(n.Members))
+	count := 0
+
+	for host, _ := range n.Members {
+		if count == index {
+			return host
 		}
 
+		count++
+	}
+
+	return ""
+}
+
+func (n *Node) broadcast(method string, args PingArgs, reply PingReply) {
+	for member, _ := range n.Members {
+		n.call(member, method, &args, &reply)
+	}
+}
+
+func (n *Node) pingMember(host string) {
+	args := PingArgs{n.Host}
+	reply := PingReply{}
+	n.call(host, "Node.Ping", &args, &reply)
+}
+
+func (n *Node) heartbeat() {
+	for {
+		host := n.pickMember()
+		go n.pingMember(host)
 		time.Sleep(T)
 	}
 }

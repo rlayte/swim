@@ -15,6 +15,15 @@ func checkMembers(t *testing.T, node *Node, cluster []*Node) {
 	}
 }
 
+func checkCluster(t *testing.T, cluster []*Node) {
+	for _, node := range cluster {
+		checkMembers(t, node, cluster)
+	}
+}
+
+func checkFailures(t *testing.T, cluster []*Node, failed []int) {
+}
+
 func createCluster(size int) []*Node {
 	cluster := []*Node{NewNode(0)}
 
@@ -30,9 +39,7 @@ func createCluster(size int) []*Node {
 func TestNoFailures(t *testing.T) {
 	cluster := createCluster(10)
 
-	time.Sleep(T * 3)
+	time.Sleep(T * 10)
 
-	for _, node := range cluster {
-		checkMembers(t, node, cluster)
-	}
+	checkCluster(t, cluster)
 }
