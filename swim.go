@@ -17,9 +17,10 @@ const (
 )
 
 type Node struct {
-	Members map[string]bool
-	Host    string
-	dead    bool
+	Members     map[string]bool
+	Host        string
+	dead        bool
+	partitioned map[string]bool
 }
 
 type PingArgs struct {
@@ -56,6 +57,7 @@ func (n *Node) Ping(args *PingArgs, reply *PingReply) error {
 }
 
 func (n *Node) PingReq(args *PingArgs, reply *PingReply) error {
+	n.call(args.Host, "Node.Ping", &args, &reply)
 	return nil
 }
 
@@ -90,8 +92,32 @@ func (n *Node) pingMember(host string) {
 	go func() {
 		args := PingArgs{n.Host}
 		reply := PingReply{}
+
 		n.call(host, "Node.Ping", &args, &reply)
-		resp <- reply.Ack
+
+		if reply.Ack {
+			resp <- reply.Ack
+		} else {
+			probed := map[string]bool{
+				host: true,
+			}
+
+			for i := 0; i < k; i++ {
+				go func() {
+					other := n.pickMember()
+
+					for probed[other] {
+						other = n.pickMember()
+					}
+
+					n.call(other, "Node.PingReq", &args, &reply)
+
+					if reply.Ack {
+						resp <- reply.Ack
+					}
+				}()
+			}
+		}
 	}()
 
 	select {
@@ -118,6 +144,10 @@ func (n *Node) join(seed string) {
 }
 
 func (n *Node) call(srv string, rpcname string, args interface{}, reply interface{}) bool {
+	if n.partitioned[srv] {
+		return false
+	}
+
 	c, errx := rpc.Dial("unix", srv)
 	for errx != nil {
 		c, errx = rpc.Dial("unix", srv)
@@ -130,6 +160,10 @@ func (n *Node) call(srv string, rpcname string, args interface{}, reply interfac
 	}
 
 	return err == nil
+}
+
+func (n *Node) stopRPC() {
+	os.Remove(n.Host)
 }
 
 func (n *Node) startRPC() {
@@ -155,10 +189,11 @@ func (n *Node) startRPC() {
 	}
 }
 
-func NewNode(id int) *Node {
+func NewNode(clusterId string, id int) *Node {
 	n := &Node{
-		Host:    fmt.Sprintf("gossip-%d", id),
-		Members: map[string]bool{},
+		Host:        fmt.Sprintf("%s-%d", clusterId, id),
+		Members:     map[string]bool{},
+		partitioned: map[string]bool{},
 	}
 
 	go n.heartbeat()
